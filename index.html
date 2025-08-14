@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>英語學習平台</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .timer-display {
+            background: rgba(255,255,255,0.2);
+            padding: 10px 20px;
+            border-radius: 20px;
+            display: inline-block;
+            backdrop-filter: blur(10px);
+            margin-bottom: 20px;
+        }
+
+        .tabs {
+            display: flex;
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px 15px 0 0;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px 20px;
+            background: transparent;
+            border: none;
+            color: white;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .tab:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .tab.active {
+            background: rgba(255,255,255,0.2);
+            transform: translateY(-2px);
+        }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+        }
+
+        .content {
+            background: white;
+            border-radius: 0 0 15px 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            height: 80vh;
+            position: relative;
+        }
+
+        .tab-content {
+            display: none;
+            height: 100%;
+            position: relative;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .iframe-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: white;
+        }
+
+        .loading {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1.2rem;
+            color: #666;
+            background: white;
+            z-index: 10;
+        }
+
+        .loading::after {
+            content: '';
+            width: 30px;
+            height: 30px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            margin-left: 10px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .expired-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            color: white;
+            z-index: 1000;
+        }
+
+        .expired-message {
+            text-align: center;
+            padding: 40px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .expired-message h2 {
+            font-size: 2rem;
+            margin-bottom: 15px;
+            color: #ff6b6b;
+        }
+
+        .expired-message p {
+            font-size: 1.1rem;
+            line-height: 1.6;
+        }
+
+        .permission-notice {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            z-index: 100;
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .tab {
+                font-size: 1rem;
+                padding: 12px 15px;
+            }
+            
+            .content {
+                height: 70vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 英語學習平台</h1>
+            <div class="timer-display" id="timerDisplay">
+                ⏰ 剩餘時間: <span id="timeLeft">12:00:00</span>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('adventure')">
+                🏝️ 英語冒險島
+            </button>
+            <button class="tab" onclick="switchTab('companion')">
+                🤖 AI英語伴讀
+            </button>
+        </div>
+
+        <div class="content">
+            <div id="adventure" class="tab-content active">
+                <div class="iframe-container">
+                    <div class="loading" id="adventureLoading">正在載入英語冒險島...</div>
+                    <div class="permission-notice" id="adventurePermission">
+                        🎤 已請求麥克風權限
+                    </div>
+                    <iframe 
+                        id="adventureFrame"
+                        src=""
+                        allow="microphone *; camera *; autoplay *; encrypted-media *; fullscreen *; geolocation *; accelerometer *; gyroscope *; magnetometer *; payment *; usb *"
+                        allowfullscreen
+                        sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-storage-access-by-user-activation allow-top-navigation-by-user-activation"
+                        referrerpolicy="no-referrer-when-downgrade"
+                        loading="lazy">
+                    </iframe>
+                </div>
+            </div>
+
+            <div id="companion" class="tab-content">
+                <div class="iframe-container">
+                    <div class="loading" id="companionLoading">正在載入AI英語伴讀...</div>
+                    <div class="permission-notice" id="companionPermission">
+                        🎤 已請求麥克風權限
+                    </div>
+                    <iframe 
+                        id="companionFrame"
+                        src=""
+                        allow="microphone *; camera *; autoplay *; encrypted-media *; fullscreen *; geolocation *; accelerometer *; gyroscope *; magnetometer *; payment *; usb *"
+                        allowfullscreen
+                        sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-storage-access-by-user-activation allow-top-navigation-by-user-activation"
+                        referrerpolicy="no-referrer-when-downgrade"
+                        loading="lazy">
+                    </iframe>
+                </div>
+            </div>
+
+            <div class="expired-overlay" id="expiredOverlay">
+                <div class="expired-message">
+                    <h2>⏰ 試用時間已結束</h2>
+                    <p>您的12小時試用期已到期<br>
+                    感謝您體驗我們的英語學習平台！<br>
+                    如需繼續使用，請聯繫客服。</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class TrialManager {
+            constructor() {
+                this.TRIAL_DURATION = 12 * 60 * 60 * 1000; // 12小時毫秒
+                this.STORAGE_KEY = 'englishLearningTrialStart';
+                this.PERMISSION_STORAGE_KEY = 'englishLearningPermissions';
+                this.currentTab = 'adventure';
+                this.isExpired = false;
+                this.loadedTabs = new Set();
+                this.permissionsGranted = false;
+                
+                this.init();
+            }
+
+            init() {
+                this.checkTrialStatus();
+                if (!this.isExpired) {
+                    this.startTimer();
+                    this.setupPermissions();
+                    this.loadInitialTab();
+                }
+            }
+
+            async setupPermissions() {
+                try {
+                    // 檢查已存儲的權限狀態
+                    const storedPermissions = JSON.parse(localStorage.getItem(this.PERMISSION_STORAGE_KEY) || '{}');
+                    
+                    // 請求麥克風權限
+                    if (!storedPermissions.microphone) {
+                        try {
+                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                            stream.getTracks().forEach(track => track.stop());
+                            storedPermissions.microphone = true;
+                            this.showPermissionNotice('🎤 麥克風權限已授權');
+                        } catch (e) {
+                            console.log('麥克風權限請求被拒絕:', e);
+                            storedPermissions.microphone = false;
+                        }
+                    }
+
+                    // 請求相機權限（如果需要）
+                    if (!storedPermissions.camera) {
+                        try {
+                            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                            stream.getTracks().forEach(track => track.stop());
+                            storedPermissions.camera = true;
+                        } catch (e) {
+                            console.log('相機權限請求被拒絕:', e);
+                            storedPermissions.camera = false;
+                        }
+                    }
+
+                    // 保存權限狀態
+                    localStorage.setItem(this.PERMISSION_STORAGE_KEY, JSON.stringify(storedPermissions));
+                    this.permissionsGranted = storedPermissions.microphone;
+
+                } catch (error) {
+                    console.log('權限設置失敗:', error);
+                }
+            }
+
+            showPermissionNotice(message) {
+                const notices = document.querySelectorAll('.permission-notice');
+                notices.forEach(notice => {
+                    notice.textContent = message;
+                    notice.style.display = 'block';
+                    setTimeout(() => {
+                        notice.style.display = 'none';
+                    }, 3000);
+                });
+            }
+
+            checkTrialStatus() {
+                let trialStart = localStorage.getItem(this.STORAGE_KEY);
+                
+                if (!trialStart) {
+                    // 首次使用，記錄開始時間
+                    trialStart = Date.now();
+                    localStorage.setItem(this.STORAGE_KEY, trialStart.toString());
+                } else {
+                    trialStart = parseInt(trialStart);
+                }
+
+                const elapsed = Date.now() - trialStart;
+                
+                if (elapsed >= this.TRIAL_DURATION) {
+                    this.showExpiredMessage();
+                    this.isExpired = true;
+                } else {
+                    this.remainingTime = this.TRIAL_DURATION - elapsed;
+                }
+            }
+
+            startTimer() {
+                this.updateTimerDisplay();
+                
+                this.timerInterval = setInterval(() => {
+                    this.remainingTime -= 1000;
+                    
+                    if (this.remainingTime <= 0) {
+                        this.showExpiredMessage();
+                        clearInterval(this.timerInterval);
+                        return;
+                    }
+                    
+                    this.updateTimerDisplay();
+                }, 1000);
+            }
+
+            updateTimerDisplay() {
+                const hours = Math.floor(this.remainingTime / (60 * 60 * 1000));
+                const minutes = Math.floor((this.remainingTime % (60 * 60 * 1000)) / (60 * 1000));
+                const seconds = Math.floor((this.remainingTime % (60 * 1000)) / 1000);
+                
+                const timeString = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                document.getElementById('timeLeft').textContent = timeString;
+            }
+
+            showExpiredMessage() {
+                document.getElementById('expiredOverlay').style.display = 'flex';
+                this.isExpired = true;
+                
+                // 清理所有iframe
+                const frames = document.querySelectorAll('iframe');
+                frames.forEach(frame => {
+                    frame.src = 'about:blank';
+                });
+            }
+
+            loadInitialTab() {
+                // 預載入英語冒險島
+                setTimeout(() => {
+                    this.loadTabContent('adventure');
+                }, 500);
+            }
+
+            loadTabContent(tabName) {
+                if (this.isExpired || this.loadedTabs.has(tabName)) return;
+
+                const loadingElement = document.getElementById(tabName + 'Loading');
+                const iframe = document.getElementById(tabName + 'Frame');
+                
+                // 根據不同tab載入不同URL
+                const urls = {
+                    'adventure': 'https://afs-english-adventure.web.app/',
+                    'companion': 'https://ai-english-pet-fcc1c.firebaseapp.com/'
+                };
+                
+                // 設置iframe屬性以確保完整功能
+                iframe.src = urls[tabName];
+                
+                const loadTimeout = setTimeout(() => {
+                    if (loadingElement.style.display !== 'none') {
+                        loadingElement.innerHTML = '⚠️ 載入中，請稍候...';
+                    }
+                }, 5000);
+
+                iframe.onload = () => {
+                    clearTimeout(loadTimeout);
+                    loadingElement.style.display = 'none';
+                    this.loadedTabs.add(tabName);
+                    
+                    // 確保iframe可見
+                    iframe.style.display = 'block';
+                    iframe.style.visibility = 'visible';
+                    
+                    console.log(`${tabName} 載入完成`);
+                };
+                
+                iframe.onerror = () => {
+                    clearTimeout(loadTimeout);
+                    loadingElement.innerHTML = '❌ 載入失敗，請檢查網路連線';
+                    console.error(`${tabName} 載入失敗`);
+                };
+
+                // 處理iframe內部導航
+                iframe.addEventListener('load', () => {
+                    try {
+                        // 嘗試與iframe通信以確保權限正確傳遞
+                        iframe.contentWindow.postMessage({
+                            type: 'PARENT_READY',
+                            permissions: JSON.parse(localStorage.getItem(this.PERMISSION_STORAGE_KEY) || '{}')
+                        }, '*');
+                    } catch (e) {
+                        console.log('iframe通信設置:', e);
+                    }
+                });
+            }
+
+            switchTab(newTab) {
+                if (this.isExpired) return;
+                
+                // 移除所有active class
+                document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+                
+                // 添加active class到新tab
+                event.target.classList.add('active');
+                document.getElementById(newTab).classList.add('active');
+                
+                // 管理iframe的可見性以避免衝突
+                const allFrames = document.querySelectorAll('iframe');
+                allFrames.forEach(frame => {
+                    if (frame.id === newTab + 'Frame') {
+                        frame.style.visibility = 'visible';
+                        frame.style.display = 'block';
+                    } else {
+                        frame.style.visibility = 'hidden';
+                    }
+                });
+                
+                this.currentTab = newTab;
+                
+                // 載入tab內容（如果尚未載入）
+                if (!this.loadedTabs.has(newTab)) {
+                    this.loadTabContent(newTab);
+                }
+            }
+        }
+
+        // 全域函數供HTML調用
+        let trialManager;
+
+        function switchTab(tabName) {
+            trialManager.switchTab(tabName);
+        }
+
+        // 監聽來自iframe的消息
+        window.addEventListener('message', (event) => {
+            // 處理來自嵌入網站的權限請求
+            if (event.data && event.data.type === 'REQUEST_PERMISSIONS') {
+                console.log('收到權限請求:', event.data);
+            }
+        });
+
+        // 頁面載入完成後初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            trialManager = new TrialManager();
+        });
+
+        // 頁面關閉前清理
+        window.addEventListener('beforeunload', () => {
+            if (trialManager && trialManager.timerInterval) {
+                clearInterval(trialManager.timerInterval);
+            }
+        });
+
+        // 處理頁面可見性變化，暫停不可見的iframe以節省資源
+        document.addEventListener('visibilitychange', () => {
+            if (trialManager && !trialManager.isExpired) {
+                const currentFrame = document.getElementById(trialManager.currentTab + 'Frame');
+                if (document.hidden) {
+                    // 頁面隱藏時，暫停當前iframe
+                    if (currentFrame) {
+                        currentFrame.style.visibility = 'hidden';
+                    }
+                } else {
+                    // 頁面可見時，恢復當前iframe
+                    if (currentFrame) {
+                        currentFrame.style.visibility = 'visible';
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
