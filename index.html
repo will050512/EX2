@@ -207,6 +207,76 @@
                 height: 70vh;
             }
         }
+
+        /* 使用者資訊強制填寫 modal */
+        #userInfoModal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0,0,0,0.6);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            padding: 20px;
+        }
+
+        #userInfoModal .modal {
+            background: #fff;
+            width: 100%;
+            max-width: 440px;
+            border-radius: 12px;
+            padding: 22px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: left;
+        }
+
+        #userInfoModal h3 {
+            margin-bottom: 8px;
+            font-size: 1.2rem;
+            color: #333;
+        }
+
+        #userInfoModal p.helper {
+            margin-bottom: 14px;
+            color: #666;
+            font-size: 0.95rem;
+        }
+
+        #userInfoModal .form-row {
+            margin-bottom: 12px;
+        }
+
+        #userInfoModal label { display:block; font-size:0.95rem; margin-bottom:6px; color:#333; }
+        #userInfoModal input, #userInfoModal select {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-size: 1rem;
+        }
+
+        #userInfoModal .modal-actions {
+            margin-top: 16px;
+            display:flex;
+            gap:10px;
+            justify-content:flex-end;
+        }
+
+        #userInfoModal .btn {
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        #userInfoModal .btn.secondary { background:#e0e0e0; color:#333; }
+        #userInfoModal .btn.primary { background: #4caf50; color: #fff; }
+
+        #ui_msg { color: #d32f2f; font-size: 0.92rem; margin-top:6px; }
     </style>
 </head>
 <body>
@@ -219,10 +289,10 @@
         </div>
 
         <div class="tabs">
-            <button class="tab active" onclick="switchTab('adventure')">
+            <button class="tab active" data-tab="adventure" onclick="switchTab('adventure')">
                 🏝️ 英語冒險島
             </button>
-            <button class="tab" onclick="switchTab('companion')">
+            <button class="tab" data-tab="companion" onclick="switchTab('companion')">
                 🤖 AI英語伴讀
             </button>
         </div>
@@ -275,21 +345,72 @@
         </div>
     </div>
 
+    <!-- 使用者資訊強制填寫 Modal -->
+    <div id="userInfoModal" aria-hidden="true">
+        <div class="modal" role="dialog" aria-modal="true" aria-label="填寫基本資料以啟用試用">
+            <h3>開啟 12 小時免費試用前，請先填寫基本資料</h3>
+            <p class="helper">我們會將資訊儲存在您的裝置（localStorage），僅用於啟用試用與後續聯繫。</p>
+
+            <div class="form-row">
+                <label for="ui_parentName">家長姓名 *</label>
+                <input id="ui_parentName" type="text" placeholder="例如：王小明">
+            </div>
+            <div class="form-row">
+                <label for="ui_phone">聯絡電話 *</label>
+                <input id="ui_phone" type="text" inputmode="numeric" placeholder="請輸入手機或市話，勿含空格">
+            </div>
+            <div class="form-row">
+                <label for="ui_email">Email *</label>
+                <input id="ui_email" type="email" placeholder="example@mail.com">
+            </div>
+            <div class="form-row">
+                <label for="ui_childAge">孩子年齡</label>
+                <select id="ui_childAge">
+                    <option value="4-6">4-6歲</option>
+                    <option value="7-9">7-9歲</option>
+                    <option value="10-12">10-12歲</option>
+                    <option value="13-15">13-15歲</option>
+                    <option value="16-18">16-18歲</option>
+                </select>
+            </div>
+
+            <div id="ui_msg"></div>
+
+            <div class="modal-actions">
+                <button class="btn secondary" onclick="closePageOrWindow()">暫不加入</button>
+                <button class="btn primary" onclick="submitUserInfo()">確認並啟用試用</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         class TrialManager {
             constructor() {
                 this.TRIAL_DURATION = 12 * 60 * 60 * 1000; // 12小時毫秒
                 this.STORAGE_KEY = 'englishLearningTrialStart';
                 this.PERMISSION_STORAGE_KEY = 'englishLearningPermissions';
+                this.USER_INFO_KEY = 'englishLearningUserInfo';
                 this.currentTab = 'adventure';
                 this.isExpired = false;
                 this.loadedTabs = new Set();
                 this.permissionsGranted = false;
-                
-                this.init();
+                this.remainingTime = this.TRIAL_DURATION;
+                // 不在 constructor 自動啟動。呼叫 init() 或 startAfterVerification() 以啟動試用流程。
             }
 
+            // 初始化：若已填寫使用者資訊則直接啟動試用，否則顯示強制填寫 modal
             init() {
+                const userInfo = localStorage.getItem(this.USER_INFO_KEY);
+                if (!userInfo) {
+                    showUserInfoModal();
+                    return;
+                }
+                // 使用者已填寫，開始試用
+                this.startAfterVerification();
+            }
+
+            // 使用者填寫並確認後啟動試用流程
+            startAfterVerification() {
                 this.checkTrialStatus();
                 if (!this.isExpired) {
                     this.startTimer();
@@ -352,7 +473,7 @@
                 let trialStart = localStorage.getItem(this.STORAGE_KEY);
                 
                 if (!trialStart) {
-                    // 首次使用，記錄開始時間
+                    // 首次使用（或剛完成填寫資訊），記錄開始時間為現在
                     trialStart = Date.now();
                     localStorage.setItem(this.STORAGE_KEY, trialStart.toString());
                 } else {
@@ -360,7 +481,7 @@
                 }
 
                 const elapsed = Date.now() - trialStart;
-                
+
                 if (elapsed >= this.TRIAL_DURATION) {
                     this.showExpiredMessage();
                     this.isExpired = true;
@@ -469,12 +590,14 @@
                 if (this.isExpired) return;
                 
                 // 移除所有active class
-                document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-                
-                // 添加active class到新tab
-                event.target.classList.add('active');
-                document.getElementById(newTab).classList.add('active');
+                    document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+                    // 添加active class到對應的 tab button
+                    const tabButton = document.querySelector('.tab[data-tab="' + newTab + '"]');
+                    if (tabButton) tabButton.classList.add('active');
+                    const contentEl = document.getElementById(newTab);
+                    if (contentEl) contentEl.classList.add('active');
                 
                 // 管理iframe的可見性以避免衝突
                 const allFrames = document.querySelectorAll('iframe');
@@ -503,6 +626,67 @@
             trialManager.switchTab(tabName);
         }
 
+        // 顯示/關閉使用者資訊 modal
+        function showUserInfoModal() {
+            const modal = document.getElementById('userInfoModal');
+            if (modal) modal.style.display = 'flex';
+        }
+
+        function closeUserInfoModal() {
+            const modal = document.getElementById('userInfoModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function submitUserInfo() {
+            const parentName = document.getElementById('ui_parentName').value.trim();
+            const phone = document.getElementById('ui_phone').value.trim();
+            const email = document.getElementById('ui_email').value.trim();
+            const childAge = document.getElementById('ui_childAge').value;
+
+            if (!parentName || !phone || !email) {
+                const msg = document.getElementById('ui_msg');
+                if (msg) {
+                    msg.textContent = '請完整填寫：家長姓名、聯絡電話、Email。';
+                }
+                return;
+            }
+
+            const info = { parentName, phone, email, childAge, createdAt: Date.now() };
+            localStorage.setItem('englishLearningUserInfo', JSON.stringify(info));
+            // 隱藏 modal 並開始試用
+            closeUserInfoModal();
+            if (trialManager) {
+                trialManager.startAfterVerification();
+            }
+        }
+
+        // 嘗試關閉分頁或視窗，若無法關閉，導向 about:blank 並顯示提示
+        function closePageOrWindow() {
+            // 先嘗試直接關閉
+            try {
+                // 在多數瀏覽器中，只有透過 window.open 開啟或用 script 開啟的視窗可被關閉
+                window.open('', '_self');
+                window.close();
+                // 如果仍然沒關閉，再導向 about:blank
+                setTimeout(() => {
+                    if (!document.hidden) {
+                        // 如果頁面還在，導向 about:blank
+                        try {
+                            window.location.href = 'about:blank';
+                        } catch (e) {
+                            // 最後退回到關閉 modal
+                            closeUserInfoModal();
+                            alert('無法關閉視窗，已為您關閉表單。');
+                        }
+                    }
+                }, 300);
+            } catch (err) {
+                // 兜底行為
+                closeUserInfoModal();
+                alert('無法自動關閉視窗，已為您關閉表單。');
+            }
+        }
+
         // 監聽來自iframe的消息
         window.addEventListener('message', (event) => {
             // 處理來自嵌入網站的權限請求
@@ -514,6 +698,7 @@
         // 頁面載入完成後初始化
         document.addEventListener('DOMContentLoaded', () => {
             trialManager = new TrialManager();
+            trialManager.init();
         });
 
         // 頁面關閉前清理
