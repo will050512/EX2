@@ -83,6 +83,10 @@
             background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
         }
 
+    /* 標示必填為紅色並加紅色星號 */
+    label.required { color: #c62828; }
+    label.required::after { content: ' *'; color: #c62828; margin-left:4px; }
+
         .content {
             background: white;
             border-radius: 0 0 15px 15px;
@@ -250,23 +254,23 @@
 
                 <form id="trialForm" autocomplete="on">
                     <div class="form-row">
-                        <label for="parentName">家長姓名 *</label>
+                        <label for="parentName" class="required">家長姓名</label>
                         <input id="parentName" name="parentName" type="text" required placeholder="例如：王小明" />
                     </div>
 
                     <div class="form-row">
-                        <label for="contactPhone">聯絡電話 *</label>
+                        <label for="contactPhone" class="required">聯絡電話</label>
                         <input id="contactPhone" name="contactPhone" type="tel" required placeholder="例如：0912-345-678" />
                     </div>
 
                     <div class="form-row">
-                        <label for="email">Email *</label>
+                        <label for="email" class="required">Email</label>
                         <input id="email" name="email" type="email" required placeholder="example@mail.com" />
                     </div>
 
                     <div class="form-row">
-                        <label for="childAge">孩童年齡（選填）</label>
-                        <select id="childAge" name="childAge">
+                        <label for="childAge" class="required">孩童年齡</label>
+                        <select id="childAge" name="childAge" required>
                             <option value="">-- 請選擇 --</option>
                             <option value="3">3 歲</option>
                             <option value="4">4 歲</option>
@@ -276,6 +280,14 @@
                             <option value="8">8 歲</option>
                             <option value="9">9 歲</option>
                             <option value="10">10 歲</option>
+                            <option value="11">11 歲</option>
+                            <option value="12">12 歲</option>
+                            <option value="13">13 歲</option>
+                            <option value="14">14 歲</option>
+                            <option value="15">15 歲</option>
+                            <option value="16">16 歲</option>
+                            <option value="17">17 歲</option>
+                            <option value="18">18 歲</option>
                         </select>
                     </div>
 
@@ -379,6 +391,13 @@
             return phone.replace(/\D/g, '');
         }
         function isValidEmail(email) { return /\S+@\S+\.\S+/.test(String(email || '').trim()); }
+        function isValidPhone(phone) {
+            if (!phone) return false;
+            // allow leading +, then 8-15 digits total
+            const cleaned = String(phone).trim();
+            const m = cleaned.match(/^\+?(\d{8,15})$/);
+            return !!m;
+        }
 
         // Registration form handling (overlay)
         const form = document.getElementById('trialForm');
@@ -397,8 +416,9 @@
             if (!parentName) { showMessage('請填寫家長姓名', 'error'); return; }
             if (!contactPhoneRaw) { showMessage('請填寫聯絡電話', 'error'); return; }
             const contactPhone = sanitizePhone(contactPhoneRaw);
-            if (contactPhone.length < 6) { showMessage('電話號碼看起來太短，請確認', 'error'); return; }
+            if (!isValidPhone(contactPhone)) { showMessage('請輸入正確的電話，需 8–15 位數字，可含 + 開頭', 'error'); return; }
             if (!isValidEmail(emailRaw)) { showMessage('請輸入正確的 Email', 'error'); return; }
+            if (!childAge) { showMessage('請選擇孩童年齡', 'error'); return; }
 
             if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes('PUT_YOUR_APPS_SCRIPT')) {
                 showMessage('請先將 APPS_SCRIPT_URL 填入程式頂端，否則無法送出。', 'error');
@@ -463,6 +483,36 @@
             }
         }
         form.addEventListener('submit', handleRegistrationSubmit);
+
+        // 防止用戶另存/複製/檢視原始碼等簡單客戶端行為（僅作前端阻擋，無法完全防止）
+        function installAntiCopyHandlers() {
+            // 禁用右鍵選單
+            document.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+            // 禁用複製/剪下/貼上
+            document.addEventListener('copy', (e) => { e.preventDefault(); });
+            document.addEventListener('cut', (e) => { e.preventDefault(); });
+            // 禁用文字選取（但允許表單內選取）
+            document.body.style.userSelect = 'none';
+            const formCard = document.querySelector('.form-card');
+            if (formCard) formCard.style.userSelect = 'text';
+            // 取消拖曳
+            document.addEventListener('dragstart', (e) => { e.preventDefault(); });
+
+            // 攔截常見快捷鍵：Ctrl+S, Ctrl+U, Ctrl+Shift+I/J/C, F12
+            document.addEventListener('keydown', (e) => {
+                const key = e.key.toLowerCase();
+                const ctrl = e.ctrlKey || e.metaKey;
+                if ((ctrl && key === 's') || (ctrl && key === 'u') || e.key === 'F12' || (ctrl && e.shiftKey && (key === 'i' || key === 'j' || key === 'c'))) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // 可顯示提示
+                    const fb = document.getElementById('feedback');
+                    if (fb && fb.innerHTML === '') fb.innerHTML = '<div class="msg small">此頁內容受保護，請透過平台操作。</div>';
+                    return false;
+                }
+            }, { capture: true });
+        }
+        installAntiCopyHandlers();
 
         class TrialManager {
             constructor() {
@@ -536,6 +586,7 @@
                 });
             }
 
+                // ...existing code...
             checkTrialStatus() {
                 let trialStart = localStorage.getItem(this.STORAGE_KEY);
                 
