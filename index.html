@@ -526,12 +526,17 @@
 
                     const result = await response.json();
                     console.log('重複檢查結果:', result);
-                    
-                    return result.isDuplicate || false;
+
+                    // 若後端回傳錯誤，將錯誤資訊回傳給呼叫端以便決定是否阻止試用
+                    if (result && result.error) {
+                        return { error: true, message: result.message || '後端檢查失敗' };
+                    }
+
+                    return { success: true, isDuplicate: !!(result && result.isDuplicate) };
                 } catch (error) {
                     console.error('檢查重複失敗:', error);
-                    // 如果檢查失敗，為了用戶體驗，允許繼續試用但記錄錯誤
-                    return false;
+                    // 返回錯誤物件，呼叫端可依此決定是否阻止試用
+                    return { error: true, message: error.toString() };
                 }
             }
 
@@ -571,12 +576,16 @@
 
                     const result = await response.json();
                     console.log('提交結果:', result);
-                    
-                    return result.success || false;
+
+                    // 若後端回傳錯誤，將錯誤物件回傳給呼叫端
+                    if (result && result.error) {
+                        return { error: true, message: result.message || '後端提交失敗' };
+                    }
+
+                    return { success: !!(result && result.success), trialId: result && result.trialId };
                 } catch (error) {
                     console.error('提交到後端失敗:', error);
-                    // 即使後端提交失敗也允許試用，但記錄錯誤
-                    return false;
+                    return { error: true, message: error.toString() };
                 }
             }
 
@@ -869,61 +878,83 @@
                 msg.className = 'info-msg';
             }
 
-            try {
-                // 檢查是否為重複使用者
-                const formData = {
-                    parentName: parentName,
-                    phone: phone,
-                    email: email,
-                    childAge: childAge
-                };
-                
-                const isDuplicate = await trialManager.checkDuplicateUser(formData);
-                
-                if (isDuplicate) {
+                try {
+                    // 檢查是否為重複使用者
+                    const formData = {
+                        parentName: parentName,
+                        phone: phone,
+                        email: email,
+                        childAge: childAge
+                    };
+                    
+                    const dupResult = await trialManager.checkDuplicateUser(formData);
+                    
+                    // 處理重複檢查錯誤或結果
+                    if (dupResult && dupResult.error) {
+                        // 顯示錯誤並要求使用者重試
+                        if (msg) {
+                            msg.textContent = '無法完成重複檢查，請稍後重試。';
+                            msg.className = '';
+                        }
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = '確認並啟用試用';
+                        return;
+                    }
+
+                    if (dupResult && dupResult.isDuplicate) {
+                        if (msg) {
+                            msg.textContent = '檢測到重複資料，試用僅限一次。如有疑問請聯繫客服。';
+                            msg.className = '';
+                        }
+                        trialManager.showBlockedMessage('檢測到重複資料（姓名、電話或Email已使用過）');
+                        closeUserInfoModal();
+                        return;
+                    }
+
                     if (msg) {
-                        msg.textContent = '檢測到重複資料，試用僅限一次。如有疑問請聯繫客服。';
-                        msg.className = '';
+                        msg.textContent = '資料驗證成功，正在提交...';
+                        msg.className = 'info-msg';
                     }
-                    trialManager.showBlockedMessage('檢測到重複資料（姓名、電話或Email已使用過）');
-                    closeUserInfoModal();
-                    return;
-                }
 
-                if (msg) {
-                    msg.textContent = '資料驗證成功，正在提交...';
-                    msg.className = 'info-msg';
-                }
+                    // 提交使用者資料到後端
+                    const submitResult = await trialManager.submitUserData(parentName, phone, email, childAge);
 
-                // 提交使用者資料到後端
-                const submitSuccess = await trialManager.submitUserData(parentName, phone, email, childAge);
-                
-                // 儲存使用者資訊到 localStorage
-                const info = { 
-                    parentName, 
-                    phone, 
-                    email, 
-                    childAge, 
-                    createdAt: Date.now(),
-                    ipRegion: trialManager.userLocation,
-                    submitSuccess: submitSuccess
-                };
-                localStorage.setItem(trialManager.USER_INFO_KEY, JSON.stringify(info));
-                
-                if (msg) {
-                    msg.textContent = submitSuccess ? 
-                        '資料提交成功，正在啟用試用...' : 
-                        '資料已記錄，正在啟用試用...';
-                    msg.className = 'success-msg';
-                }
-                
-                // 關閉 modal 並啟動試用
-                setTimeout(() => {
-                    closeUserInfoModal();
-                    if (trialManager) {
-                        trialManager.startAfterVerification();
+                    // 若提交失敗則顯示錯誤並要求重試（阻止啟用試用）
+                    if (submitResult && submitResult.error) {
+                        if (msg) {
+                            msg.textContent = '資料提交失敗：' + (submitResult.message || '請稍後重試');
+                            msg.className = '';
+                        }
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = '確認並啟用試用';
+                        return;
                     }
-                }, 1000);
+                    
+                    // 儲存使用者資訊到 localStorage（標記提交成功）
+                    const info = { 
+                        parentName, 
+                        phone, 
+                        email, 
+                        childAge, 
+                        createdAt: Date.now(),
+                        ipRegion: trialManager.userLocation,
+                        submitSuccess: true,
+                        trialId: submitResult && submitResult.trialId
+                    };
+                    localStorage.setItem(trialManager.USER_INFO_KEY, JSON.stringify(info));
+                    
+                    if (msg) {
+                        msg.textContent = '資料提交成功，正在啟用試用...';
+                        msg.className = 'success-msg';
+                    }
+                    
+                    // 關閉 modal 並啟動試用
+                    setTimeout(() => {
+                        closeUserInfoModal();
+                        if (trialManager) {
+                            trialManager.startAfterVerification();
+                        }
+                    }, 1000);
 
             } catch (error) {
                 console.error('提交使用者資訊時發生錯誤:', error);

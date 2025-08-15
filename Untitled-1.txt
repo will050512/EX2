@@ -1,0 +1,583 @@
+/**
+ * 英語學習平台後端 Apps Script
+ * 處理試用用戶註冊、重複檢查和數據管理
+ */
+
+// 配置設定
+const CONFIG = {
+  SPREADSHEET_ID: '1E8VLVMpBhC_fVW43xr_8r9CDt7cG_7sPpZfk6vZpVXc', // 請替換為您的試算表ID
+  SHEET_NAME: '用戶資料',
+  NOTIFICATION_EMAIL: 'info.aifunschool@gmail.com', // 接收通知的郵箱
+  MAX_DAILY_TRIALS: 1000, // 每日最大試用數量限制
+};
+
+/**
+ * 主要入口函數 - 處理所有HTTP請求
+ */
+function doPost(e) {
+  try {
+    // 設置CORS標頭
+    const response = {
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Content-Type': 'application/json'
+      }
+    };
+
+    // 解析請求參數
+    const params = parseRequestParams(e);
+    const action = params.action;
+
+    console.log('收到請求:', action, params);
+
+    // 根據action分發處理
+    let result;
+    switch (action) {
+      case 'checkDuplicate':
+        result = handleCheckDuplicate(params);
+        break;
+      case 'submitTrial':
+        result = handleSubmitTrial(params);
+        break;
+      case 'getStats':
+        result = handleGetStats(params);
+        break;
+      default:
+        result = { error: true, message: '無效的請求類型' };
+    }
+
+    return ContentService
+      .createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (error) {
+    console.error('處理請求時發生錯誤:', error);
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        error: true,
+        message: '伺服器內部錯誤',
+        details: error.toString()
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * 處理OPTIONS請求（CORS預檢）
+ */
+function doOptions(e) {
+  // 簡化 OPTIONS 回應：Apps Script 無法可靠地設置自定義回應標頭於 TextOutput，
+  // 只回傳空的文字回覆即可讓瀏覽器完成預檢（實務上也請確保 Web App 部署為「任何人（匿名）」）。
+  return ContentService
+    .createTextOutput('')
+    .setMimeType(ContentService.MimeType.TEXT);
+}
+
+/**
+ * 解析請求參數
+ */
+function parseRequestParams(e) {
+  let params = {};
+  
+  try {
+    // 嘗試解析POST body
+    if (e.postData && e.postData.contents) {
+      const contentType = e.postData.type || '';
+      
+      // 支援帶有 charset 的 content-type，例如: application/x-www-form-urlencoded;charset=UTF-8
+      if (contentType.indexOf('application/x-www-form-urlencoded') !== -1) {
+        // 解析表單數據 (注意 + 代表空格)
+        const formData = e.postData.contents;
+        const pairs = formData.split('&');
+        
+        pairs.forEach(pair => {
+          const [rawKey, rawVal] = pair.split('=');
+          const key = decodeURIComponent(rawKey || '');
+          const value = decodeURIComponent((rawVal || '').replace(/\+/g, ' '));
+          params[key] = value;
+        });
+      } else if (contentType.indexOf('application/json') !== -1) {
+        // 解析JSON數據（支援包含 charset 的情況）
+        try {
+          params = JSON.parse(e.postData.contents);
+        } catch (jsonErr) {
+          console.error('解析 JSON 失敗:', jsonErr);
+        }
+      }
+    }
+    
+    // 合併URL參數（query string / e.parameter）
+    if (e.parameter) {
+      params = { ...params, ...e.parameter };
+    }
+    
+  } catch (error) {
+    console.error('解析請求參數失敗:', error);
+  }
+  
+  return params;
+}
+
+/**
+ * 處理重複檢查請求
+ */
+function handleCheckDuplicate(params) {
+  try {
+    const { parentName, phone, email } = params;
+    
+    // 參數驗證
+    if (!parentName || !phone || !email) {
+      return {
+        error: true,
+        message: '缺少必要參數：parentName, phone, email'
+      };
+    }
+
+    // 獲取試算表
+    const sheet = getOrCreateSheet();
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    
+    // 找到對應的欄位索引
+    const nameIndex = headers.indexOf('家長姓名');
+    const phoneIndex = headers.indexOf('聯絡電話');
+    const emailIndex = headers.indexOf('Email');
+    
+    if (nameIndex === -1 || phoneIndex === -1 || emailIndex === -1) {
+      console.error('試算表格式錯誤，缺少必要欄位');
+      return { error: true, message: '系統配置錯誤' };
+    }
+
+    // 檢查重複
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const rowName = (row[nameIndex] || '').toString().trim();
+      const rowPhone = (row[phoneIndex] || '').toString().trim();
+      const rowEmail = (row[emailIndex] || '').toString().trim();
+      
+      // 檢查是否有任一項目匹配
+      if (rowName === parentName.trim() || 
+          rowPhone === phone.trim() || 
+          rowEmail === email.trim()) {
+        console.log('發現重複用戶:', { parentName, phone, email });
+        return {
+          isDuplicate: true,
+          message: '檢測到重複資料'
+        };
+      }
+    }
+
+    return { isDuplicate: false };
+
+  } catch (error) {
+    console.error('檢查重複時發生錯誤:', error);
+    return {
+      error: true,
+      message: '檢查重複失敗',
+      details: error.toString()
+    };
+  }
+}
+
+/**
+ * 處理試用提交請求
+ */
+function handleSubmitTrial(params) {
+  try {
+    const {
+      parentName,
+      phone,
+      email,
+      childAge,
+      ipRegion,
+      trialStartTime,
+      trialEndTime,
+      source
+    } = params;
+
+    // 參數驗證
+    if (!parentName || !phone || !email) {
+      return {
+        error: true,
+        message: '缺少必要參數'
+      };
+    }
+
+    // 再次檢查重複（雙重保險）
+    const duplicateCheck = handleCheckDuplicate(params);
+    if (duplicateCheck.error) {
+      return duplicateCheck;
+    }
+    if (duplicateCheck.isDuplicate) {
+      return {
+        isDuplicate: true,
+        message: '檢測到重複資料，無法重複註冊'
+      };
+    }
+
+    // 檢查每日試用限制
+    if (!checkDailyLimit()) {
+      return {
+        error: true,
+        message: '今日試用名額已滿，請明日再試'
+      };
+    }
+
+    // 獲取試算表並添加數據
+    const sheet = getOrCreateSheet();
+    const timestamp = new Date();
+    
+    // 準備要插入的數據
+    const rowData = [
+      timestamp.toLocaleString('zh-TW'), // 註冊時間
+      parentName.trim(),
+      phone.trim(),
+      email.trim(),
+      childAge || '',
+      ipRegion || '',
+      trialStartTime || '',
+      trialEndTime || '',
+      source || 'trial_platform',
+      '進行中', // 狀態
+      '', // 備註
+      generateTrialId() // 試用ID
+    ];
+
+    // 插入新行
+    sheet.appendRow(rowData);
+    
+    console.log('成功添加試用用戶:', parentName, phone, email);
+
+    // 發送通知郵件
+    try {
+      sendNotificationEmail(rowData);
+    } catch (emailError) {
+      console.error('發送通知郵件失敗:', emailError);
+    }
+
+    return {
+      success: true,
+      message: '試用註冊成功',
+      trialId: rowData[rowData.length - 1]
+    };
+
+  } catch (error) {
+    console.error('提交試用時發生錯誤:', error);
+    return {
+      error: true,
+      message: '提交失敗',
+      details: error.toString()
+    };
+  }
+}
+
+/**
+ * 處理統計請求
+ */
+function handleGetStats(params) {
+  try {
+    const sheet = getOrCreateSheet();
+    const data = sheet.getDataRange().getValues();
+    
+    if (data.length <= 1) {
+      return {
+        totalUsers: 0,
+        todayUsers: 0,
+        activeTrials: 0
+      };
+    }
+
+    const today = new Date();
+    const todayStr = today.toDateString();
+    
+    let totalUsers = data.length - 1; // 扣除標頭行
+    let todayUsers = 0;
+    let activeTrials = 0;
+    
+    // 統計數據
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const registrationDate = new Date(row[0]);
+      const status = row[9]; // 狀態欄位
+      
+      // 今日註冊數
+      if (registrationDate.toDateString() === todayStr) {
+        todayUsers++;
+      }
+      
+      // 進行中的試用
+      if (status === '進行中') {
+        activeTrials++;
+      }
+    }
+
+    return {
+      totalUsers,
+      todayUsers,
+      activeTrials,
+      lastUpdate: new Date().toLocaleString('zh-TW')
+    };
+
+  } catch (error) {
+    console.error('獲取統計數據時發生錯誤:', error);
+    return {
+      error: true,
+      message: '獲取統計失敗',
+      details: error.toString()
+    };
+  }
+}
+
+/**
+ * 獲取或創建試算表
+ */
+function getOrCreateSheet() {
+  try {
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    let sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME);
+    
+    if (!sheet) {
+      // 創建新的工作表
+      sheet = spreadsheet.insertSheet(CONFIG.SHEET_NAME);
+      
+      // 設置標頭
+      const headers = [
+        '註冊時間',
+        '家長姓名',
+        '聯絡電話',
+        'Email',
+        '孩子年齡',
+        'IP地區',
+        '試用開始時間',
+        '試用結束時間',
+        '來源',
+        '狀態',
+        '備註',
+        '試用ID'
+      ];
+      
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      
+      // 設置格式
+      const headerRange = sheet.getRange(1, 1, 1, headers.length);
+      headerRange.setFontWeight('bold');
+      headerRange.setBackground('#4285f4');
+      headerRange.setFontColor('white');
+      
+      // 設置欄寬
+      sheet.setColumnWidth(1, 150); // 註冊時間
+      sheet.setColumnWidth(2, 100); // 家長姓名
+      sheet.setColumnWidth(3, 120); // 聯絡電話
+      sheet.setColumnWidth(4, 200); // Email
+      sheet.setColumnWidth(5, 80);  // 孩子年齡
+      sheet.setColumnWidth(6, 120); // IP地區
+      sheet.setColumnWidth(7, 150); // 試用開始
+      sheet.setColumnWidth(8, 150); // 試用結束
+      sheet.setColumnWidth(9, 100); // 來源
+      sheet.setColumnWidth(10, 80); // 狀態
+      sheet.setColumnWidth(11, 150); // 備註
+      sheet.setColumnWidth(12, 120); // 試用ID
+      
+      console.log('成功創建新的工作表:', CONFIG.SHEET_NAME);
+    }
+    
+    return sheet;
+    
+  } catch (error) {
+    console.error('獲取試算表失敗:', error);
+    throw new Error('無法存取資料表，請檢查試算表ID設定');
+  }
+}
+
+/**
+ * 檢查每日試用限制
+ */
+function checkDailyLimit() {
+  try {
+    const sheet = getOrCreateSheet();
+    const data = sheet.getDataRange().getValues();
+    
+    if (data.length <= 1) return true;
+    
+    const today = new Date().toDateString();
+    let todayCount = 0;
+    
+    for (let i = 1; i < data.length; i++) {
+      const registrationDate = new Date(data[i][0]);
+      if (registrationDate.toDateString() === today) {
+        todayCount++;
+      }
+    }
+    
+    return todayCount < CONFIG.MAX_DAILY_TRIALS;
+    
+  } catch (error) {
+    console.error('檢查每日限制失敗:', error);
+    return true; // 出錯時允許繼續
+  }
+}
+
+/**
+ * 生成唯一的試用ID
+ */
+function generateTrialId() {
+  const timestamp = Date.now();
+  const randomNum = Math.floor(Math.random() * 10000);
+  return `TRIAL_${timestamp}_${randomNum}`;
+}
+
+/**
+ * 發送通知郵件
+ */
+function sendNotificationEmail(userData) {
+  try {
+    if (!CONFIG.NOTIFICATION_EMAIL) return;
+    
+    const [timestamp, parentName, phone, email, childAge, ipRegion] = userData;
+    
+    const subject = '🎯 新的英語學習平台試用註冊';
+    const body = `
+親愛的管理員，
+
+有新的用戶註冊了英語學習平台試用：
+
+📋 用戶資訊：
+• 家長姓名：${parentName}
+• 聯絡電話：${phone}
+• Email：${email}
+• 孩子年齡：${childAge}
+• IP地區：${ipRegion}
+• 註冊時間：${timestamp}
+
+請及時跟進用戶需求。
+
+此郵件由系統自動發送。
+    `;
+    
+    MailApp.sendEmail({
+      to: CONFIG.NOTIFICATION_EMAIL,
+      subject: subject,
+      body: body
+    });
+    
+    console.log('通知郵件發送成功');
+    
+  } catch (error) {
+    console.error('發送通知郵件失敗:', error);
+  }
+}
+
+/**
+ * 清理過期的試用數據（可設定為定時觸發）
+ */
+function cleanupExpiredTrials() {
+  try {
+    const sheet = getOrCreateSheet();
+    const data = sheet.getDataRange().getValues();
+    
+    if (data.length <= 1) return;
+    
+    const now = new Date();
+    let cleanedCount = 0;
+    
+    // 從最後一行開始檢查（避免刪除時索引變化）
+    for (let i = data.length - 1; i >= 1; i--) {
+      const row = data[i];
+      const trialEndTimeStr = row[7]; // 試用結束時間
+      
+      if (trialEndTimeStr) {
+        const trialEndTime = new Date(trialEndTimeStr);
+        
+        // 如果試用已結束超過7天，標記為過期
+        if (now.getTime() - trialEndTime.getTime() > 7 * 24 * 60 * 60 * 1000) {
+          sheet.getRange(i + 1, 10).setValue('已過期'); // 更新狀態
+          cleanedCount++;
+        }
+      }
+    }
+    
+    console.log(`清理作業完成，標記 ${cleanedCount} 個過期試用`);
+    return cleanedCount;
+    
+  } catch (error) {
+    console.error('清理過期數據失敗:', error);
+    return 0;
+  }
+}
+
+/**
+ * 獲取試算表數據摘要（管理用）
+ */
+function getDataSummary() {
+  try {
+    const sheet = getOrCreateSheet();
+    const data = sheet.getDataRange().getValues();
+    
+    if (data.length <= 1) {
+      return '試算表為空';
+    }
+    
+    const stats = handleGetStats({});
+    const recentUsers = [];
+    
+    // 獲取最近5個用戶
+    for (let i = Math.max(1, data.length - 5); i < data.length; i++) {
+      const row = data[i];
+      recentUsers.push({
+        時間: row[0],
+        姓名: row[1],
+        電話: row[2],
+        狀態: row[9]
+      });
+    }
+    
+    return {
+      統計: stats,
+      最近用戶: recentUsers,
+      總數據行數: data.length - 1
+    };
+    
+  } catch (error) {
+    console.error('獲取數據摘要失敗:', error);
+    return { error: error.toString() };
+  }
+}
+
+/**
+ * 測試函數
+ */
+function testFunctions() {
+  console.log('=== 開始測試 Apps Script 功能 ===');
+  
+  // 測試創建工作表
+  try {
+    const sheet = getOrCreateSheet();
+    console.log('✓ 工作表創建/獲取成功');
+  } catch (error) {
+    console.log('✗ 工作表測試失敗:', error);
+  }
+  
+  // 測試重複檢查
+  try {
+    const result = handleCheckDuplicate({
+      parentName: '測試用戶',
+      phone: '0912345678',
+      email: 'test@example.com'
+    });
+    console.log('✓ 重複檢查功能正常:', result);
+  } catch (error) {
+    console.log('✗ 重複檢查測試失敗:', error);
+  }
+  
+  // 測試統計功能
+  try {
+    const stats = handleGetStats({});
+    console.log('✓ 統計功能正常:', stats);
+  } catch (error) {
+    console.log('✗ 統計功能測試失敗:', error);
+  }
+  
+  console.log('=== 測試完成 ===');
+}
