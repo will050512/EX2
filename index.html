@@ -433,371 +433,369 @@
     </div>
 
     <script>
-    // Apps Script Web App URL（部署 exec）
+    // Consolidated script: single source of truth for trial logic and UI behaviors.
     const GAS_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbxEfA2V8VkBiH8Hq_8gFT0j4eWsdrIHH9gQDvHfY8dNYIG8o7ZGk1bZrQc77euS-kCk/exec';
+    const DEBUG_MODE = true;
 
-        class TrialManager {
-            constructor() {
-                this.TRIAL_DURATION = 12 * 60 * 60 * 1000; // 12小時毫秒
-                this.STORAGE_KEY = 'englishLearningTrialStart';
-                this.PERMISSION_STORAGE_KEY = 'englishLearningPermissions';
-                this.USER_INFO_KEY = 'englishLearningUserInfo';
-                this.currentTab = 'adventure';
-                this.isExpired = false;
-                this.loadedTabs = new Set();
-                this.permissionsGranted = false;
-                this.remainingTime = this.TRIAL_DURATION;
-                this.userLocation = '';
-                this.isBlocked = false;
+    class TrialManager {
+        constructor() {
+            this.TRIAL_DURATION = 12 * 60 * 60 * 1000; // 12 hours
+            this.STORAGE_KEY = 'englishLearningTrialStart';
+            this.PERMISSION_STORAGE_KEY = 'englishLearningPermissions';
+            this.USER_INFO_KEY = 'englishLearningUserInfo';
+            this.currentTab = 'adventure';
+            this.isExpired = false;
+            this.loadedTabs = new Set();
+            this.permissionsGranted = false;
+            this.remainingTime = this.TRIAL_DURATION;
+            this.userLocation = '';
+            this.isBlocked = false;
+            this.timerInterval = null;
+        }
+
+        debugLog(msg, data = '') {
+            if (!DEBUG_MODE) return;
+            console.log('[TrialManager]', msg, data);
+            const debugEl = document.getElementById('debugInfo');
+            if (debugEl) {
+                debugEl.style.display = 'block';
+                debugEl.innerHTML = `<div>${new Date().toLocaleTimeString()} - ${msg}</div>` + debugEl.innerHTML;
+                // keep latest 6
+                const lines = debugEl.querySelectorAll('div');
+                if (lines.length > 6) for (let i = 6; i < lines.length; i++) lines[i].remove();
             }
+        }
 
-            // 初始化：若已填寫使用者資訊則直接啟動試用，否則顯示強制填寫 modal
-            init() {
-                // 先取得使用者地理位置
-                this.getUserLocation().then(() => {
-                    const userInfo = this.getUserInfo();
-                    if (!userInfo) {
-                        showUserInfoModal();
-                        return;
-                    }
-                    // 使用者已填寫，開始試用
-                    this.startAfterVerification();
+        async init() {
+            this.debugLog('init start');
+            await this.getUserLocation();
+            const userInfo = this.getUserInfo();
+            if (!userInfo) {
+                this.debugLog('no user info, show modal');
+                showUserInfoModal();
+                return;
+            }
+            this.debugLog('user info found', userInfo);
+            this.startAfterVerification();
+        }
+
+        async getUserLocation() {
+            try {
+                const resp = await fetch('https://ipapi.co/json/');
+                if (!resp.ok) throw new Error('ip lookup failed');
+                const d = await resp.json();
+                this.userLocation = `${d.city || ''} ${d.region || ''} ${d.country || ''}`.trim();
+                this.debugLog('location', this.userLocation);
+            } catch (e) {
+                this.debugLog('getUserLocation failed', e.message || e);
+                this.userLocation = '位置未知';
+            }
+        }
+
+        getUserInfo() {
+            try {
+                const raw = localStorage.getItem(this.USER_INFO_KEY);
+                return raw ? JSON.parse(raw) : null;
+            } catch (e) {
+                this.debugLog('parse userInfo failed', e);
+                return null;
+            }
+        }
+
+        async checkDuplicateUser(formData) {
+            const parentName = (formData.parentName || '').toString().trim();
+            const phone = (formData.phone || '').toString().trim();
+            const email = (formData.email || '').toString().trim();
+            this.debugLog('checkDuplicateUser', { parentName, phone, email });
+
+            const body = new URLSearchParams({ action: 'checkDuplicate', parentName, phone, email }).toString();
+
+            try {
+                const resp = await fetch(GAS_WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                    body
                 });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const result = await resp.json();
+                this.debugLog('duplicate check result', result);
+                if (result && result.error) return false; // backend error => allow
+                return result && result.isDuplicate === true;
+            } catch (e) {
+                this.debugLog('checkDuplicateUser failed - allow on network error', e.message || e);
+                return false; // permit on network failures
             }
+        }
 
-            // 取得使用者地理位置
-            async getUserLocation() {
-                try {
-                    const response = await fetch('https://ipapi.co/json/');
-                    const data = await response.json();
-                    this.userLocation = `${data.city || ''} ${data.region || ''} ${data.country || ''}`.trim();
-                    console.log('使用者位置:', this.userLocation);
-                } catch (error) {
-                    console.log('取得位置失敗:', error);
-                    this.userLocation = '位置未知';
-                }
-            }
+        async submitUserData(parentName, phone, email, childAge) {
+            const now = new Date();
+            const trialEnd = new Date(now.getTime() + this.TRIAL_DURATION);
+            const payload = new URLSearchParams({
+                action: 'submitTrial',
+                parentName: parentName || '',
+                phone: phone || '',
+                email: email || '',
+                childAge: childAge || '',
+                ipRegion: this.userLocation || '',
+                trialStartTime: now.toLocaleString('zh-TW'),
+                trialEndTime: trialEnd.toLocaleString('zh-TW'),
+                source: 'trial_platform'
+            }).toString();
 
-            // 取得使用者資訊
-            getUserInfo() {
-                const userInfoStr = localStorage.getItem(this.USER_INFO_KEY);
-                return userInfoStr ? JSON.parse(userInfoStr) : null;
-            }
-
-            // 檢查是否為重複試用 - 修正版
-            async checkDuplicateUser(formData) {
-                let parentName = '';
-                let phone = '';
-                let email = '';
-                
-                if (formData instanceof FormData) {
-                    parentName = (formData.get('parentName') || '').toString().trim();
-                    phone = (formData.get('phone') || '').toString().trim();
-                    email = (formData.get('email') || '').toString().trim();
-                } else {
-                    parentName = (formData.parentName || '').toString().trim();
-                    phone = (formData.phone || '').toString().trim();
-                    email = (formData.email || '').toString().trim();
-                }
-
-                const params = new URLSearchParams();
-                params.append('action', 'checkDuplicate');
-                params.append('parentName', parentName);
-                params.append('phone', phone);
-                params.append('email', email);
-
-                try {
-                    console.log('發送重複檢查請求:', params.toString());
-                    
-                    const response = await fetch(GAS_WEBHOOK_URL, {
-                        method: 'POST',
-                        headers: { 
-                            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
-                        },
-                        body: params.toString()
-                    });
-
-                    console.log('重複檢查回應狀態:', response.status);
-                    
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-
-                    const result = await response.json();
-                    console.log('重複檢查結果:', result);
-                    
-                    // 檢查回應格式並處理可能的錯誤
-                    if (result.error) {
-                        console.error('後端檢查重複時發生錯誤:', result.message);
-                        // 發生錯誤時允許繼續試用，避免影響用戶體驗
-                        return false;
-                    }
-                    
-                    return result.isDuplicate === true;
-                    
-                } catch (error) {
-                    console.error('檢查重複失敗:', error);
-                    // 網路錯誤時允許繼續試用，避免影響用戶體驗
-                    return false;
-                }
-            }
-
-            // 提交使用者資訊到後端 - 修正版
-            async submitUserData(parentName, phone, email, childAge) {
-                const now = new Date();
-                const trialEnd = new Date(now.getTime() + this.TRIAL_DURATION);
-                
-                const params = new URLSearchParams();
-                params.append('action', 'submitTrial');
-                params.append('parentName', parentName || '');
-                params.append('phone', phone || '');
-                params.append('email', email || '');
-                params.append('childAge', childAge || '');
-                params.append('ipRegion', this.userLocation || '');
-                params.append('trialStartTime', now.toLocaleString('zh-TW'));
-                params.append('trialEndTime', trialEnd.toLocaleString('zh-TW'));
-                params.append('source', 'trial_platform');
-
-                try {
-                    console.log('發送提交請求:', params.toString());
-                    
-                    const response = await fetch(GAS_WEBHOOK_URL, {
-                        method: 'POST',
-                        headers: { 
-                            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
-                        },
-                        body: params.toString()
-                    });
-
-                    console.log('提交回應狀態:', response.status);
-                    
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-
-                    const result = await response.json();
-                    console.log('提交結果:', result);
-                    
-                    // 檢查是否為重複提交的錯誤
-                    if (result.isDuplicate === true) {
-                        console.log('後端檢測到重複資料');
-                        return { success: false, isDuplicate: true };
-                    }
-                    
-                    if (result.error) {
-                        console.error('後端提交時發生錯誤:', result.message);
-                        return { success: false, error: result.message };
-                    }
-                    
-                    return { success: result.success === true };
-                    
-                } catch (error) {
-                    console.error('提交到後端失敗:', error);
-                    return { success: false, networkError: true };
-                }
-            }
-
-            // 使用者填寫並確認後啟動試用流程
-            startAfterVerification() {
-                if (this.isBlocked) return;
-                
-                this.checkTrialStatus();
-                if (!this.isExpired && !this.isBlocked) {
-                    this.startTimer();
-                    this.setupPermissions();
-                    this.loadInitialTab();
-                }
-            }
-
-            // 顯示被封鎖訊息
-            showBlockedMessage(reason = '檢測到重複試用，試用僅限一次') {
-                this.isBlocked = true;
-                document.getElementById('blockedReason').innerHTML = reason + '<br>如有疑問請聯繫客服';
-                document.getElementById('blockedOverlay').style.display = 'flex';
-            }
-
-            async setupPermissions() {
-                try {
-                    // 檢查已存儲的權限狀態
-                    const storedPermissions = JSON.parse(localStorage.getItem(this.PERMISSION_STORAGE_KEY) || '{}');
-                    
-                    // 請求麥克風權限
-                    if (!storedPermissions.microphone) {
-                        try {
-                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                            stream.getTracks().forEach(track => track.stop());
-                            storedPermissions.microphone = true;
-                            this.showPermissionNotice('🎤 麥克風權限已授權');
-                        } catch (e) {
-                            console.log('麥克風權限請求被拒絕:', e);
-                            storedPermissions.microphone = false;
-                        }
-                    }
-
-                    // 請求相機權限（如果需要）
-                    if (!storedPermissions.camera) {
-                        try {
-                            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                            stream.getTracks().forEach(track => track.stop());
-                            storedPermissions.camera = true;
-                        } catch (e) {
-                            console.log('相機權限請求被拒絕:', e);
-                            storedPermissions.camera = false;
-                        }
-                    }
-
-                    // 保存權限狀態
-                    localStorage.setItem(this.PERMISSION_STORAGE_KEY, JSON.stringify(storedPermissions));
-                    this.permissionsGranted = storedPermissions.microphone;
-
-                } catch (error) {
-                    console.log('權限設置失敗:', error);
-                }
-            }
-
-            showPermissionNotice(message) {
-                const notices = document.querySelectorAll('.permission-notice');
-                notices.forEach(notice => {
-                    notice.textContent = message;
-                    notice.style.display = 'block';
-                    setTimeout(() => {
-                        notice.style.display = 'none';
-                    }, 3000);
+            try {
+                const resp = await fetch(GAS_WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                    body: payload
                 });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const result = await resp.json();
+                this.debugLog('submitUserData result', result);
+                if (result && result.isDuplicate === true) return { success: false, isDuplicate: true };
+                if (result && result.error) return { success: false, error: result.message };
+                return { success: result && result.success === true };
+            } catch (e) {
+                this.debugLog('submitUserData network error', e.message || e);
+                return { success: false, networkError: true };
             }
+        }
 
-            checkTrialStatus() {
+        startAfterVerification() {
+            if (this.isBlocked) return;
+            this.checkTrialStatus();
+            if (this.isExpired || this.isBlocked) return;
+            this.startTimer();
+            // don't block on permissions
+            this.setupPermissions().catch(e => this.debugLog('setupPermissions error', e));
+            this.loadInitialTab();
+        }
+
+        showBlockedMessage(reason = '檢測到重複試用，試用僅限一次') {
+            this.isBlocked = true;
+            const el = document.getElementById('blockedReason');
+            if (el) el.innerHTML = reason + '<br>如有疑問請聯繫客服';
+            const overlay = document.getElementById('blockedOverlay');
+            if (overlay) overlay.style.display = 'flex';
+        }
+
+        async setupPermissions() {
+            const stored = JSON.parse(localStorage.getItem(this.PERMISSION_STORAGE_KEY) || '{}');
+            // request microphone
+            if (!stored.microphone && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                try {
+                    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    s.getTracks().forEach(t => t.stop());
+                    stored.microphone = true;
+                    this.showPermissionNotice('🎤 麥克風權限已授權');
+                } catch (e) {
+                    this.debugLog('microphone denied', e.message || e);
+                    stored.microphone = false;
+                }
+            }
+            // request camera (optional)
+            if (!stored.camera && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                try {
+                    const s = await navigator.mediaDevices.getUserMedia({ video: true });
+                    s.getTracks().forEach(t => t.stop());
+                    stored.camera = true;
+                } catch (e) {
+                    this.debugLog('camera denied', e.message || e);
+                    stored.camera = false;
+                }
+            }
+            localStorage.setItem(this.PERMISSION_STORAGE_KEY, JSON.stringify(stored));
+            this.permissionsGranted = !!stored.microphone;
+        }
+
+        showPermissionNotice(message) {
+            document.querySelectorAll('.permission-notice').forEach(n => {
+                n.textContent = message;
+                n.style.display = 'block';
+                setTimeout(() => n.style.display = 'none', 3000);
+            });
+        }
+
+        checkTrialStatus() {
+            try {
                 let trialStart = localStorage.getItem(this.STORAGE_KEY);
-                
                 if (!trialStart) {
-                    // 首次使用（或剛完成填寫資訊），記錄開始時間為現在
                     trialStart = Date.now();
-                    localStorage.setItem(this.STORAGE_KEY, trialStart.toString());
+                    localStorage.setItem(this.STORAGE_KEY, String(trialStart));
+                    this.debugLog('trial start set', new Date(parseInt(trialStart)));
                 } else {
                     trialStart = parseInt(trialStart);
+                    this.debugLog('trial start read', new Date(trialStart));
                 }
-
                 const elapsed = Date.now() - trialStart;
-
                 if (elapsed >= this.TRIAL_DURATION) {
                     this.showExpiredMessage();
                     this.isExpired = true;
                 } else {
                     this.remainingTime = this.TRIAL_DURATION - elapsed;
                 }
+            } catch (e) {
+                this.debugLog('checkTrialStatus error', e);
             }
+        }
 
-            startTimer() {
+        startTimer() {
+            this.updateTimerDisplay();
+            if (this.timerInterval) clearInterval(this.timerInterval);
+            this.timerInterval = setInterval(() => {
+                this.remainingTime -= 1000;
+                if (this.remainingTime <= 0) {
+                    this.showExpiredMessage();
+                    clearInterval(this.timerInterval);
+                    return;
+                }
                 this.updateTimerDisplay();
-                
-                this.timerInterval = setInterval(() => {
-                    this.remainingTime -= 1000;
-                    
-                    if (this.remainingTime <= 0) {
-                        this.showExpiredMessage();
-                        clearInterval(this.timerInterval);
-                        return;
-                    }
-                    
-                    this.updateTimerDisplay();
-                }, 1000);
+            }, 1000);
+        }
+
+        updateTimerDisplay() {
+            const h = Math.floor(this.remainingTime / 3600000);
+            const m = Math.floor((this.remainingTime % 3600000) / 60000);
+            const s = Math.floor((this.remainingTime % 60000) / 1000);
+            const str = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+            const el = document.getElementById('timeLeft');
+            if (el) el.textContent = str;
+        }
+
+        showExpiredMessage() {
+            const overlay = document.getElementById('expiredOverlay');
+            if (overlay) overlay.style.display = 'flex';
+            this.isExpired = true;
+            document.querySelectorAll('iframe').forEach(f => f.src = 'about:blank');
+        }
+
+        loadInitialTab() {
+            setTimeout(() => this.loadTabContent('adventure'), 300);
+        }
+
+        loadTabContent(tabName) {
+            if (this.isExpired || this.isBlocked || this.loadedTabs.has(tabName)) return;
+            const loading = document.getElementById(`${tabName}Loading`);
+            const iframe = document.getElementById(`${tabName}Frame`);
+            const urls = { adventure: 'https://afs-english-adventure.web.app/', companion: 'https://ai-english-pet-fcc1c.firebaseapp.com/' };
+            if (!iframe || !urls[tabName]) return;
+            iframe.src = urls[tabName];
+            const t = setTimeout(() => { if (loading && loading.style.display !== 'none') loading.textContent = '⚠️ 載入中，請稍候...'; }, 5000);
+            iframe.onload = () => { clearTimeout(t); if (loading) loading.style.display = 'none'; this.loadedTabs.add(tabName); iframe.style.visibility = 'visible'; iframe.style.display = 'block'; this.debugLog(`${tabName} loaded`); };
+            iframe.onerror = () => { clearTimeout(t); if (loading) loading.textContent = '❌ 載入失敗，請檢查網路連線'; this.debugLog(`${tabName} load error`); };
+            iframe.addEventListener('load', () => {
+                try { iframe.contentWindow.postMessage({ type: 'PARENT_READY', permissions: JSON.parse(localStorage.getItem(this.PERMISSION_STORAGE_KEY) || '{}') }, '*'); } catch (e) { this.debugLog('postMessage failed', e); }
+            });
+        }
+
+        switchTab(newTab) {
+            if (this.isExpired || this.isBlocked) return;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            const btn = document.querySelector(`.tab[data-tab="${newTab}"]`);
+            if (btn) btn.classList.add('active');
+            const content = document.getElementById(newTab);
+            if (content) content.classList.add('active');
+            document.querySelectorAll('iframe').forEach(f => f.style.visibility = f.id === `${newTab}Frame` ? 'visible' : 'hidden');
+            this.currentTab = newTab;
+            if (!this.loadedTabs.has(newTab)) this.loadTabContent(newTab);
+        }
+    }
+
+    // global instance
+    let trialManager = null;
+
+    // helper UI functions
+    function showUserInfoModal() { const m = document.getElementById('userInfoModal'); if (m) m.style.display = 'flex'; }
+    function closeUserInfoModal() { const m = document.getElementById('userInfoModal'); if (m) m.style.display = 'none'; }
+
+    async function submitUserInfo() {
+        const parentName = document.getElementById('ui_parentName').value.trim();
+        const phone = document.getElementById('ui_phone').value.trim();
+        const email = document.getElementById('ui_email').value.trim();
+        const childAge = document.getElementById('ui_childAge').value;
+        const submitBtn = document.getElementById('submitBtn');
+        const msg = document.getElementById('ui_msg');
+        if (msg) { msg.textContent = ''; msg.className = ''; }
+
+        if (!parentName || !phone || !email) {
+            if (msg) { msg.textContent = '請完整填寫：家長姓名、聯絡電話、Email。'; }
+            setTimeout(() => closePageOrWindow(), 800);
+            return;
+        }
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) { if (msg) msg.textContent = '請輸入正確的Email格式。'; setTimeout(() => closePageOrWindow(), 800); return; }
+        const phoneRegex = /^[0-9\-\(\)\+\s]{8,15}$/;
+        if (!phoneRegex.test(phone)) { if (msg) msg.textContent = '請輸入正確的電話號碼格式。'; setTimeout(() => closePageOrWindow(), 800); return; }
+
+        submitBtn.disabled = true; submitBtn.textContent = '處理中...'; if (msg) { msg.textContent = '正在驗證資料，請稍候...'; msg.className = 'info-msg'; }
+
+        try {
+            const form = { parentName, phone, email, childAge };
+            const isDup = await trialManager.checkDuplicateUser(form);
+            if (isDup) {
+                if (msg) msg.textContent = '檢測到重複資料，試用僅限一次。';
+                trialManager.showBlockedMessage('檢測到重複資料（姓名、電話或Email已使用過）');
+                closeUserInfoModal();
+                return;
             }
+            if (msg) { msg.textContent = '資料驗證成功，正在提交...'; msg.className = 'info-msg'; }
+            const res = await trialManager.submitUserData(parentName, phone, email, childAge);
+            if (res.isDuplicate) { trialManager.showBlockedMessage('檢測到重複資料（姓名、電話或Email已使用過）'); closeUserInfoModal(); return; }
 
-            updateTimerDisplay() {
-                const hours = Math.floor(this.remainingTime / (60 * 60 * 1000));
-                const minutes = Math.floor((this.remainingTime % (60 * 60 * 1000)) / (60 * 1000));
-                const seconds = Math.floor((this.remainingTime % (60 * 1000)) / 1000);
-                
-                const timeString = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-                document.getElementById('timeLeft').textContent = timeString;
+            const info = { parentName, phone, email, childAge, createdAt: Date.now(), ipRegion: trialManager.userLocation, submitSuccess: res.success, submitError: res.error || res.networkError || false };
+            localStorage.setItem(trialManager.USER_INFO_KEY, JSON.stringify(info));
+
+            if (msg) {
+                if (res.success) { msg.textContent = '資料提交成功，正在啟用試用...'; msg.className = 'success-msg'; }
+                else if (res.networkError) { msg.textContent = '網路連線異常，但已為您開啟試用。'; msg.className = 'info-msg'; }
+                else { msg.textContent = '資料已記錄，正在啟用試用...'; msg.className = 'info-msg'; }
             }
+            setTimeout(() => { closeUserInfoModal(); trialManager.startAfterVerification(); }, 900);
+        } catch (e) {
+            console.error('submitUserInfo', e);
+            const info = { parentName, phone, email, childAge, createdAt: Date.now(), ipRegion: trialManager ? trialManager.userLocation : '', submitError: true, errorMessage: String(e) };
+            localStorage.setItem(trialManager.USER_INFO_KEY, JSON.stringify(info));
+            if (document.getElementById('ui_msg')) { document.getElementById('ui_msg').textContent = '網路連線異常，但已為您開啟試用。'; }
+            setTimeout(() => { closeUserInfoModal(); if (trialManager) trialManager.startAfterVerification(); }, 1200);
+        } finally {
+            submitBtn.disabled = false; submitBtn.textContent = '確認並啟用試用';
+        }
+    }
 
-            showExpiredMessage() {
-                document.getElementById('expiredOverlay').style.display = 'flex';
-                this.isExpired = true;
-                
-                // 清理所有iframe
-                const frames = document.querySelectorAll('iframe');
-                frames.forEach(frame => {
-                    frame.src = 'about:blank';
-                });
-            }
+    function closePageOrWindow() {
+        try { window.open('', '_self'); window.close(); setTimeout(() => { if (!document.hidden) { try { window.location.href = 'about:blank'; } catch (e) { closeUserInfoModal(); alert('無法關閉視窗，已為您關閉表單。'); } } }, 300); } catch (e) { closeUserInfoModal(); alert('無法自動關閉視窗，已為您關閉表單。'); }
+    }
 
-            loadInitialTab() {
-                // 預載入英語冒險島
-                setTimeout(() => {
-                    this.loadTabContent('adventure');
-                }, 500);
-            }
+    // message listener from iframes (optional)
+    window.addEventListener('message', (ev) => { if (ev.data && ev.data.type === 'REQUEST_PERMISSIONS') { console.log('iframe request permissions', ev.data); } });
 
-            loadTabContent(tabName) {
-                if (this.isExpired || this.isBlocked || this.loadedTabs.has(tabName)) return;
+    // wire up once DOM ready
+    document.addEventListener('DOMContentLoaded', () => {
+        trialManager = new TrialManager();
+        trialManager.init();
 
-                const loadingElement = document.getElementById(tabName + 'Loading');
-                const iframe = document.getElementById(tabName + 'Frame');
-                
-                // 根據不同tab載入不同URL
-                const urls = {
-                    'adventure': 'https://afs-english-adventure.web.app/',
-                    'companion': 'https://ai-english-pet-fcc1c.firebaseapp.com/'
-                };
-                
-                // 設置iframe屬性以確保完整功能
-                iframe.src = urls[tabName];
-                
-                const loadTimeout = setTimeout(() => {
-                    if (loadingElement.style.display !== 'none') {
-                        loadingElement.innerHTML = '⚠️ 載入中，請稍候...';
-                    }
-                }, 5000);
+        // bind tab buttons (in case inline handlers exist, these are idempotent)
+        document.querySelectorAll('.tab[data-tab]').forEach(btn => {
+            btn.addEventListener('click', (e) => { const t = btn.getAttribute('data-tab'); if (trialManager) trialManager.switchTab(t); });
+        });
 
-                iframe.onload = () => {
-                    clearTimeout(loadTimeout);
-                    loadingElement.style.display = 'none';
-                    this.loadedTabs.add(tabName);
-                    
-                    // 確保iframe可見
-                    iframe.style.display = 'block';
-                    iframe.style.visibility = 'visible';
-                    
-                    console.log(`${tabName} 載入完成`);
-                };
-                
-                iframe.onerror = () => {
-                    clearTimeout(loadTimeout);
-                    loadingElement.innerHTML = '❌ 載入失敗，請檢查網路連線';
-                    console.error(`${tabName} 載入失敗`);
-                };
+        // keep legacy global functions available
+        window.switchTab = (t) => { if (trialManager) trialManager.switchTab(t); };
+        window.submitUserInfo = submitUserInfo;
+        window.showUserInfoModal = showUserInfoModal;
+        window.closeUserInfoModal = closeUserInfoModal;
+    });
 
-                // 處理iframe內部導航
-                iframe.addEventListener('load', () => {
-                    try {
-                        // 嘗試與iframe通信以確保權限正確傳遞
-                        iframe.contentWindow.postMessage({
-                            type: 'PARENT_READY',
-                            permissions: JSON.parse(localStorage.getItem(this.PERMISSION_STORAGE_KEY) || '{}')
-                        }, '*');
-                    } catch (e) {
-                        console.log('iframe通信設置:', e);
-                    }
-                });
-            }
+    // clean up timer on unload
+    window.addEventListener('beforeunload', () => { if (trialManager && trialManager.timerInterval) clearInterval(trialManager.timerInterval); });
 
-            switchTab(newTab) {
-                if (this.isExpired || this.isBlocked) return;
-                
-                // 移除所有active class
-                document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-
-                // 添加active class到對應的 tab button
-                const tabButton = document.querySelector('.tab[data-tab="' + newTab + '"]');
-                if (tabButton) tabButton.classList.add('active');
-                const contentEl = document.getElementById(newTab);
-                if (contentEl) contentEl.classList.add('active');
-                
-                // 管理iframe的可見性以避免衝突
-                const allFrames = document.querySelectorAll('iframe');
+    // visibility optimization
+    document.addEventListener('visibilitychange', () => {
+        if (!trialManager || trialManager.isExpired || trialManager.isBlocked) return;
+        const f = document.getElementById(`${trialManager.currentTab}Frame`);
+        if (f) f.style.visibility = document.hidden ? 'hidden' : 'visible';
+    });
+    </script>
                 allFrames.forEach(frame => {
                     if (frame.id === newTab + 'Frame') {
                         frame.style.visibility = 'visible';
