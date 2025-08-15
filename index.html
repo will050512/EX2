@@ -87,6 +87,36 @@
     label.required { color: #c62828; }
     label.required::after { content: ' *'; color: #c62828; margin-left:4px; }
 
+        /* 全域註冊 overlay 與表單樣式（確保桌面也正確顯示） */
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.55);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            padding: 20px;
+        }
+        .form-card {
+            width: 100%;
+            max-width: 680px;
+            background: #fff;
+            padding: 22px;
+            border-radius: 12px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+            color: #111;
+        }
+        .form-card h2 { margin: 0 0 8px 0; font-size:18px }
+        .form-row { margin-top:12px }
+        .form-row label { display:block; font-size:13px; color:#333 }
+        .form-row input, .form-row select { width:100%; padding:10px 12px; margin-top:6px; border-radius:8px; border:1px solid #e3e7ea; font-size:14px; box-sizing:border-box }
+        .form-actions { margin-top:18px; display:flex; gap:10px; align-items:center }
+        .msg { margin-top:12px; padding:10px; border-radius:8px; font-size:14px }
+        .msg.error { background:#fff0f0; color:#900; border:1px solid #fcc }
+        .msg.success { background:#f0fff6; color:#0a6b2f; border:1px solid #cfeed8 }
+        .spinner { display:inline-block; width:16px; height:16px; border-radius:50%; border:2px solid rgba(0,0,0,0.12); border-top-color:#fff; animation:spin 1s linear infinite; margin-left:8px; vertical-align:middle }
+
         .content {
             background: white;
             border-radius: 0 0 15px 15px;
